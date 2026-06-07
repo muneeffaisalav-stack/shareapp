@@ -49,15 +49,11 @@ class ServerProvider with ChangeNotifier {
   String? get errorMessage => _errorMessage;
 
   Future<void> pickFiles() async {
-    FilePickerResult? result = await FilePicker.pickFiles(
-      allowMultiple: true,
-    );
+    FilePickerResult? result = await FilePicker.pickFiles(allowMultiple: true);
 
     if (result != null) {
       _files.addAll(
-        result.files
-            .where((f) => f.path != null)
-            .map((f) => File(f.path!)),
+        result.files.where((f) => f.path != null).map((f) => File(f.path!)),
       );
       notifyListeners();
     }
@@ -69,7 +65,9 @@ class ServerProvider with ChangeNotifier {
   }
 
   Future<String?> _getIpAddress() async {
-    for (var interface in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+    for (var interface in await NetworkInterface.list(
+      type: InternetAddressType.IPv4,
+    )) {
       for (var addr in interface.addresses) {
         if (!addr.isLoopback) {
           return addr.address;
@@ -84,7 +82,8 @@ class ServerProvider with ChangeNotifier {
 
     final connectivityResult = await (Connectivity().checkConnectivity());
     if (connectivityResult == ConnectivityResult.none) {
-      _errorMessage = "You're not connected to any network. Please connect to a Wi-Fi or hotspot to share files.";
+      _errorMessage =
+          "You're not connected to any network. Please connect to a Wi-Fi or hotspot to share files.";
       notifyListeners();
       return;
     }
@@ -92,25 +91,214 @@ class ServerProvider with ChangeNotifier {
     try {
       _ipAddress = await _getIpAddress();
       if (_ipAddress == null) {
-        _errorMessage = "Could not get IP address. Make sure you're connected to a Wi-Fi or hotspot.";
+        _errorMessage =
+            "Could not get IP address. Make sure you're connected to a Wi-Fi or hotspot.";
         notifyListeners();
         return;
       }
 
       final router = shelf_router.Router();
 
-      router.get('/', (shelf.Request request) {
-        String fileList = _files
-            .map(
-              (file) =>
-                  '<li><a href="/download/${_files.indexOf(file)}">${file.path.split('/').last}</a></li>',
-            )
-            .join('\n');
-        return shelf.Response.ok(
-          '<h1>Available Files:</h1><ul>$fileList</ul>',
-          headers: {'Content-Type': 'text/html'},
-        );
-      });
+      // router.get('/', (shelf.Request request) {
+      //   String fileList = _files
+      //       .map(
+      //         (file) =>
+      //             '<li><a href="/download/${_files.indexOf(file)}">${file.path.split('/').last}</a></li>',
+      //       )
+      //       .join('\n');
+      //   return shelf.Response.ok(
+      //     '<h1>Available Files:</h1><ul>$fileList</ul>',
+      //     headers: {'Content-Type': 'text/html'},
+      //   );
+      // });
+        router.get('/', (shelf.Request request) async {
+    String fileCards = '';
+
+    for (int i = 0; i < _files.length; i++) {
+      final file = _files[i];
+      final sizeKB = (await file.length()) / 1024;
+
+      fileCards += '''
+        <div class="file-card">
+          <div class="file-info">
+            <div class="file-icon">📄</div>
+            <div>
+              <div class="file-name">${file.path.split('/').last}</div>
+              <div class="file-size">${sizeKB.toStringAsFixed(2)} KB</div>
+            </div>
+          </div>
+
+          <a class="download-btn" href="/download/$i">
+            Download
+          </a>
+        </div>
+      ''';
+    }
+
+    return shelf.Response.ok(
+      '''
+  <!DOCTYPE html>
+  <html>
+  <head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>HotShare</title>
+
+  <style>
+
+  *{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+  }
+
+  body{
+    font-family: Inter, Segoe UI, sans-serif;
+    background: linear-gradient(
+      135deg,
+      #0f172a,
+      #1e293b
+    );
+    min-height:100vh;
+    color:white;
+  }
+
+  .container{
+    max-width:900px;
+    margin:auto;
+    padding:40px 20px;
+  }
+
+  .header{
+    text-align:center;
+    margin-bottom:40px;
+  }
+
+  .logo{
+    font-size:60px;
+  }
+
+  .title{
+    font-size:36px;
+    font-weight:700;
+    margin-top:12px;
+  }
+
+  .subtitle{
+    opacity:.7;
+    margin-top:8px;
+  }
+
+  .files{
+    display:flex;
+    flex-direction:column;
+    gap:16px;
+  }
+
+  .file-card{
+    background:rgba(255,255,255,.08);
+    backdrop-filter: blur(16px);
+    border:1px solid rgba(255,255,255,.1);
+    border-radius:20px;
+    padding:20px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    transition:.25s;
+  }
+
+  .file-card:hover{
+    transform:translateY(-3px);
+    background:rgba(255,255,255,.12);
+  }
+
+  .file-info{
+    display:flex;
+    align-items:center;
+    gap:16px;
+  }
+
+  .file-icon{
+    font-size:32px;
+  }
+
+  .file-name{
+    font-size:18px;
+    font-weight:600;
+    word-break:break-all;
+  }
+
+  .file-size{
+    margin-top:6px;
+    opacity:.7;
+    font-size:14px;
+  }
+
+  .download-btn{
+    text-decoration:none;
+    color:white;
+    background:#6366f1;
+    padding:12px 24px;
+    border-radius:12px;
+    font-weight:600;
+    transition:.2s;
+  }
+
+  .download-btn:hover{
+    background:#4f46e5;
+  }
+
+  .empty{
+    text-align:center;
+    padding:80px 20px;
+    opacity:.7;
+  }
+
+  @media(max-width:700px){
+
+    .file-card{
+      flex-direction:column;
+      gap:20px;
+      align-items:flex-start;
+    }
+
+    .download-btn{
+      width:100%;
+      text-align:center;
+    }
+
+  }
+
+  </style>
+  </head>
+
+  <body>
+
+  <div class="container">
+
+    <div class="header">
+        <div class="logo">🚀</div>
+        <div class="title">HotShare</div>
+        <div class="subtitle">
+          Fast local file sharing
+        </div>
+    </div>
+
+    <div class="files">
+      ${fileCards.isEmpty
+          ? '<div class="empty">No files available</div>'
+          : fileCards}
+    </div>
+
+  </div>
+
+  </body>
+  </html>
+  ''',
+      headers: {'Content-Type': 'text/html'},
+    );
+  });
 
       router.get('/download/<index>', (shelf.Request request, String index) {
         final int fileIndex = int.parse(index);
@@ -290,7 +478,10 @@ class MyHomePage extends StatelessWidget {
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 20),
-                      ElevatedButton(onPressed: serverProvider.startServer, child: const Text('Retry'))
+                      ElevatedButton(
+                        onPressed: serverProvider.startServer,
+                        child: const Text('Retry'),
+                      ),
                     ],
                   ),
                 ),
