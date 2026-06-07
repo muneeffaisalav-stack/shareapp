@@ -1,122 +1,391 @@
+import 'dart:developer' as developer;
+import 'dart:io';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:shelf/shelf.dart' as shelf;
+import 'package:shelf/shelf_io.dart' as io;
+import 'package:shelf_router/shelf_router.dart' as shelf_router;
 
 void main() {
-  runApp(const MyApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => ThemeProvider()),
+        ChangeNotifierProvider(create: (_) => ServerProvider()),
+      ],
+      child: const MyApp(),
+    ),
+  );
+}
+
+class ThemeProvider with ChangeNotifier {
+  ThemeMode _themeMode = ThemeMode.system;
+  ThemeMode get themeMode => _themeMode;
+
+  void toggleTheme() {
+    _themeMode = _themeMode == ThemeMode.light
+        ? ThemeMode.dark
+        : ThemeMode.light;
+    notifyListeners();
+  }
+}
+
+class ServerProvider with ChangeNotifier {
+  HttpServer? _server;
+  String? _ipAddress;
+  final int _port = 8080;
+  List<File> _files = [];
+  String? _errorMessage;
+
+  bool get isRunning => _server != null;
+  String? get ipAddress => _ipAddress;
+  int get port => _port;
+  List<File> get files => _files;
+  String? get errorMessage => _errorMessage;
+
+  Future<void> pickFiles() async {
+    FilePickerResult? result = await FilePicker.pickFiles(
+      allowMultiple: true,
+    );
+
+    if (result != null) {
+      _files.addAll(
+        result.files
+            .where((f) => f.path != null)
+            .map((f) => File(f.path!)),
+      );
+      notifyListeners();
+    }
+  }
+
+  void clearFiles() {
+    _files = [];
+    notifyListeners();
+  }
+
+  Future<String?> _getIpAddress() async {
+    for (var interface in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
+      for (var addr in interface.addresses) {
+        if (!addr.isLoopback) {
+          return addr.address;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> startServer() async {
+    if (isRunning) return;
+
+    final connectivityResult = await (Connectivity().checkConnectivity());
+    if (connectivityResult == ConnectivityResult.none) {
+      _errorMessage = "You're not connected to any network. Please connect to a Wi-Fi or hotspot to share files.";
+      notifyListeners();
+      return;
+    }
+
+    try {
+      _ipAddress = await _getIpAddress();
+      if (_ipAddress == null) {
+        _errorMessage = "Could not get IP address. Make sure you're connected to a Wi-Fi or hotspot.";
+        notifyListeners();
+        return;
+      }
+
+      final router = shelf_router.Router();
+
+      router.get('/', (shelf.Request request) {
+        String fileList = _files
+            .map(
+              (file) =>
+                  '<li><a href="/download/${_files.indexOf(file)}">${file.path.split('/').last}</a></li>',
+            )
+            .join('\n');
+        return shelf.Response.ok(
+          '<h1>Available Files:</h1><ul>$fileList</ul>',
+          headers: {'Content-Type': 'text/html'},
+        );
+      });
+
+      router.get('/download/<index>', (shelf.Request request, String index) {
+        final int fileIndex = int.parse(index);
+        if (fileIndex >= 0 && fileIndex < _files.length) {
+          final file = _files[fileIndex];
+          final fileStream = file.openRead();
+          final headers = {
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition':
+                'attachment; filename="${file.path.split('/').last}"',
+          };
+          return shelf.Response.ok(fileStream, headers: headers);
+        }
+        return shelf.Response.notFound('File not found');
+      });
+
+      final handler = const shelf.Pipeline()
+          .addMiddleware(shelf.logRequests())
+          .addHandler(router.call);
+      _server = await io.serve(handler, '0.0.0.0', _port);
+      _errorMessage = null; // Clear error on success
+      notifyListeners();
+    } catch (e, s) {
+      _errorMessage = "Failed to start the server. Please try again.";
+      developer.log('Error starting server', error: e, stackTrace: s);
+      notifyListeners();
+    }
+  }
+
+  void stopServer() {
+    if (_server != null) {
+      _server!.close();
+      _server = null;
+      _ipAddress = null;
+      notifyListeners();
+    }
+  }
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+    const Color primarySeedColor = Colors.deepPurple;
+
+    final TextTheme appTextTheme = TextTheme(
+      displayLarge: GoogleFonts.oswald(
+        fontSize: 57,
+        fontWeight: FontWeight.bold,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      titleLarge: GoogleFonts.roboto(fontSize: 22, fontWeight: FontWeight.w500),
+      bodyMedium: GoogleFonts.openSans(fontSize: 14),
+    );
+
+    final ThemeData lightTheme = ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: primarySeedColor,
+        brightness: Brightness.light,
+      ),
+      textTheme: appTextTheme,
+    );
+
+    final ThemeData darkTheme = ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: primarySeedColor,
+        brightness: Brightness.dark,
+      ),
+      textTheme: appTextTheme,
+    );
+
+    return Consumer<ThemeProvider>(
+      builder: (context, themeProvider, child) {
+        return MaterialApp(
+          title: 'HotShare',
+          theme: lightTheme,
+          darkTheme: darkTheme,
+          themeMode: themeProvider.themeMode,
+          home: const MyHomePage(),
+        );
+      },
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
+class MyHomePage extends StatelessWidget {
+  const MyHomePage({super.key});
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    final serverProvider = Provider.of<ServerProvider>(context);
+    final themeProvider = Provider.of<ThemeProvider>(context);
+
+    String url = serverProvider.isRunning && serverProvider.ipAddress != null
+        ? 'http://${serverProvider.ipAddress}:${serverProvider.port}'
+        : 'Server not running';
+
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+        title: const Text('HotShare'),
+        actions: [
+          IconButton(
+            icon: Icon(
+              themeProvider.themeMode == ThemeMode.dark
+                  ? Icons.light_mode
+                  : Icons.dark_mode,
             ),
+            onPressed: themeProvider.toggleTheme,
+          ),
+        ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            if (serverProvider.isRunning) ...[
+              Text(
+                'Scan QR Code to Connect',
+                style: Theme.of(context).textTheme.titleLarge,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 20),
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.all(16.0),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16.0),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withAlpha((255 * 0.1).round()),
+                        spreadRadius: 4,
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: QrImageView(
+                    data: url,
+                    version: QrVersions.auto,
+                    size: 220.0,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Or enter this URL in your browser:',
+                style: Theme.of(context).textTheme.bodyMedium,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              SelectableText(
+                url,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+            ] else if (serverProvider.errorMessage != null) ...[
+              Expanded(
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.wifi_off,
+                        size: 100,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                      const SizedBox(height: 20),
+                      Text(
+                        serverProvider.errorMessage!,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton(onPressed: serverProvider.startServer, child: const Text('Retry'))
+                    ],
+                  ),
+                ),
+              ),
+            ] else ...[
+              Expanded(
+                child: serverProvider.files.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.add_to_photos,
+                              size: 100,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                            const SizedBox(height: 20),
+                            Text(
+                              'Add files to share',
+                              style: Theme.of(context).textTheme.headlineSmall,
+                            ),
+                          ],
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: serverProvider.files.length,
+                        itemBuilder: (context, index) {
+                          final file = serverProvider.files[index];
+                          return Card(
+                            child: ListTile(
+                              leading: const Icon(Icons.insert_drive_file),
+                              title: Text(file.path.split('/').last),
+                              subtitle: FutureBuilder<int>(
+                                future: file.length(),
+                                builder: (context, snapshot) {
+                                  if (snapshot.hasData) {
+                                    return Text(
+                                      '${(snapshot.data! / 1024).toStringAsFixed(2)} KB',
+                                    );
+                                  } else {
+                                    return const Text('...');
+                                  }
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+              if (serverProvider.files.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8.0),
+                  child: ElevatedButton.icon(
+                    onPressed: serverProvider.clearFiles,
+                    icon: const Icon(Icons.clear_all),
+                    label: const Text('Clear Files'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                    ),
+                  ),
+                ),
+            ],
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!serverProvider.isRunning)
+            FloatingActionButton.extended(
+              heroTag: 'add_files',
+              onPressed: serverProvider.pickFiles,
+              label: const Text('Add Files'),
+              icon: const Icon(Icons.add),
+            ),
+          const SizedBox(height: 16),
+          FloatingActionButton.extended(
+            heroTag: 'start_stop_server',
+            onPressed: () {
+              if (serverProvider.isRunning) {
+                serverProvider.stopServer();
+              } else {
+                serverProvider.startServer();
+              }
+            },
+            label: Text(
+              serverProvider.isRunning ? 'Stop Server' : 'Start Server',
+            ),
+            icon: Icon(
+              serverProvider.isRunning ? Icons.stop : Icons.play_arrow,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
