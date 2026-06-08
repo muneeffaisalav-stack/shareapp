@@ -1,6 +1,5 @@
 import 'dart:developer' as developer;
 import 'dart:io';
-
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -40,6 +39,8 @@ class ServerProvider with ChangeNotifier {
   HttpServer? _server;
   String? _ipAddress;
   final int _port = 8080;
+  Directory? _uploadDirectory;
+
   List<File> _files = [];
   String? _errorMessage;
 
@@ -90,6 +91,13 @@ class ServerProvider with ChangeNotifier {
     }
 
     try {
+            _uploadDirectory = Directory(
+        '/storage/emulated/0/Download/HotShare',
+      );
+
+      if (!await _uploadDirectory!.exists()) {
+        await _uploadDirectory!.create(recursive: true);
+      }
       _ipAddress = await _getIpAddress();
       if (_ipAddress == null) {
         _errorMessage =
@@ -101,6 +109,27 @@ class ServerProvider with ChangeNotifier {
       final router = shelf_router.Router();
       await WakelockPlus.enable();
 
+
+      router.post('/upload', (shelf.Request request) async {
+      try {
+        final bytes = await request.read().expand((e) => e).toList();
+
+        final filename =
+            request.headers['x-filename'] ?? 'file.bin';
+
+        final file = File(
+          '${_uploadDirectory!.path}/$filename',
+        );
+
+        await file.writeAsBytes(bytes);
+
+        return shelf.Response.ok('Upload successful');
+      } catch (e) {
+        return shelf.Response.internalServerError(
+          body: e.toString(),
+        );
+      }
+    });
       // router.get('/', (shelf.Request request) {
       //   String fileList = _files
       //       .map(
@@ -286,7 +315,33 @@ class ServerProvider with ChangeNotifier {
           Fast local file sharing
         </div>
     </div>
+    <div class="file-card">
 
+    <div class="file-info">
+        <div class="file-icon">📤</div>
+        <div>
+          <div class="file-name">Send files to phone</div>
+          <div class="file-size">
+            Upload files directly to HotShare
+          </div>
+        </div>
+    </div>
+
+    <input
+        type="file"
+        id="uploadInput"
+        multiple
+        style="display:none">
+
+    <button
+        class="download-btn"
+        onclick="document.getElementById('uploadInput').click()">
+        Upload
+    </button>
+
+  </div>
+
+  <div id="uploadStatus"></div>
     <div class="files">
       ${fileCards.isEmpty
           ? '<div class="empty">No files available</div>'
@@ -295,6 +350,35 @@ class ServerProvider with ChangeNotifier {
 
   </div>
 
+  <script>
+
+document
+.getElementById('uploadInput')
+.addEventListener('change', async function () {
+
+    const files = this.files;
+
+    for (const file of files) {
+
+        document.getElementById('uploadStatus')
+        .innerHTML =
+        'Uploading ' + file.name + '...';
+
+        await fetch('/upload', {
+            method: 'POST',
+            headers: {
+              'x-filename': file.name
+            },
+            body: file
+        });
+    }
+
+    document.getElementById('uploadStatus')
+    .innerHTML = 'Upload complete';
+
+});
+
+</script>
   </body>
   </html>
   ''',
