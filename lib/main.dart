@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -98,6 +99,7 @@ class ServerProvider with ChangeNotifier {
       }
 
       final router = shelf_router.Router();
+      await WakelockPlus.enable();
 
       // router.get('/', (shelf.Request request) {
       //   String fileList = _files
@@ -328,10 +330,11 @@ class ServerProvider with ChangeNotifier {
     }
   }
 
-  void stopServer() {
+  void stopServer() async{
     if (_server != null) {
       _server!.close();
       _server = null;
+      await WakelockPlus.disable();
       _ipAddress = null;
       notifyListeners();
     }
@@ -488,61 +491,72 @@ class MyHomePage extends StatelessWidget {
               ),
             ] else ...[
               Expanded(
-                child: serverProvider.files.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.add_to_photos,
-                              size: 100,
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                            const SizedBox(height: 20),
-                            Text(
-                              'Add files to share',
-                              style: Theme.of(context).textTheme.headlineSmall,
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        itemCount: serverProvider.files.length,
-                        itemBuilder: (context, index) {
-                          final file = serverProvider.files[index];
-                          return Card(
-                            child: ListTile(
-                              leading: const Icon(Icons.insert_drive_file),
-                              title: Text(file.path.split('/').last),
-                              subtitle: FutureBuilder<int>(
-                                future: file.length(),
-                                builder: (context, snapshot) {
-                                  if (snapshot.hasData) {
-                                    return Text(
-                                      '${(snapshot.data! / 1024).toStringAsFixed(2)} KB',
-                                    );
-                                  } else {
-                                    return const Text('...');
-                                  }
-                                },
-                              ),
-                            ),
-                          );
+  child: serverProvider.files.isEmpty
+      ? Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.add_to_photos,
+                size: 100,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Add files to share',
+                style: Theme.of(context).textTheme.headlineSmall,
+              ),
+            ],
+          ),
+        )
+      : Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Selected Files (${serverProvider.files.length})',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+                TextButton.icon(
+                  onPressed: serverProvider.clearFiles,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Clear'),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 12),
+
+            Expanded(
+              child: ListView.builder(
+                itemCount: serverProvider.files.length,
+                itemBuilder: (context, index) {
+                  final file = serverProvider.files[index];
+
+                  return Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.insert_drive_file),
+                      title: Text(file.path.split('/').last),
+                      subtitle: FutureBuilder<int>(
+                        future: file.length(),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasData) {
+                            return Text(
+                              '${(snapshot.data! / 1024).toStringAsFixed(2)} KB',
+                            );
+                          }
+                          return const Text('...');
                         },
                       ),
-              ),
-              if (serverProvider.files.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
-                  child: ElevatedButton.icon(
-                    onPressed: serverProvider.clearFiles,
-                    icon: const Icon(Icons.clear_all),
-                    label: const Text('Clear Files'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red,
                     ),
-                  ),
-                ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+),
             ],
           ],
         ),
@@ -561,7 +575,7 @@ class MyHomePage extends StatelessWidget {
           const SizedBox(height: 16),
           FloatingActionButton.extended(
             heroTag: 'start_stop_server',
-            onPressed: () {
+            onPressed: () async{
               if (serverProvider.isRunning) {
                 serverProvider.stopServer();
               } else {
